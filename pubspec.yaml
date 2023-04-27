@@ -39,6 +39,7 @@ dependencies:
   flutter_sound: ^9.2.13
   fluttertoast: ^8.2.1
   hexcolor: ^3.0.1
+  http: ^0.13.5
   language_picker: ^0.4.3
   path_provider: ^2.0.14
   permission_handler: ^10.2.0
