@@ -1,21 +1,23 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_sound/public/flutter_sound_recorder.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:hexcolor/hexcolor.dart';
-import 'package:language_picker/language_picker_dropdown.dart';
+import 'package:language_picker/language_picker.dart';
 import 'package:language_picker/languages.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth/sign_in.dart';
 import 'methods/auth_method.dart';
 import 'methods/storage_method.dart';
+import 'package:http/http.dart' as http;
 
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
@@ -25,8 +27,8 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  String? inputLanguage;
-  String? outputLanguage;
+  String inputLanguage = "Hindi";
+  String outputLanguage = "English";
   final recorder = FlutterSoundRecorder();
   final audioPlayer = AudioPlayer();
   bool isPlaying = false;
@@ -36,8 +38,54 @@ class _HomePageState extends State<HomePage> {
   bool isRecorderReady = false;
   String? url;
   bool isRecording = false;
-  bool recordDone = false;
+  String? translatedText;
+  bool textTranslated = false;
+  bool translateButtonClicked = false;
+  String docId = FirebaseAuth.instance.currentUser!.uid;
+  String? outputAudioUrl;
+  bool inputLanguageSelected = false;
+  bool ouputLanguageSelected = false;
+  Language _selectedDialogLanguage = Languages.korean;
+  Widget _buildDialogItem(Language language) => Row(
+        children: <Widget>[
+          Text(language.name),
+          SizedBox(width: 8.0),
+          Flexible(child: Text("(${language.isoCode})"))
+        ],
+      );
 
+  void _openLanguagePickerDialogInput() => showDialog(
+        context: context,
+        builder: (context) => Theme(
+            data: Theme.of(context).copyWith(primaryColor: Colors.pink),
+            child: LanguagePickerDialog(
+                titlePadding: EdgeInsets.all(8.0),
+                searchCursorColor: Colors.pinkAccent,
+                searchInputDecoration: InputDecoration(hintText: 'Search...'),
+                isSearchable: true,
+                title: Text('Select your language'),
+                onValuePicked: (Language language) => setState(() {
+                      inputLanguage = language.name.toString();
+                      inputLanguageSelected = true;
+                    }),
+                itemBuilder: _buildDialogItem)),
+      );
+  void _openLanguagePickerDialogOutput() => showDialog(
+        context: context,
+        builder: (context) => Theme(
+            data: Theme.of(context).copyWith(primaryColor: Colors.pink),
+            child: LanguagePickerDialog(
+                titlePadding: EdgeInsets.all(8.0),
+                searchCursorColor: Colors.pinkAccent,
+                searchInputDecoration: InputDecoration(hintText: 'Search...'),
+                isSearchable: true,
+                title: Text('Select your language'),
+                onValuePicked: (Language language) => setState(() {
+                      outputLanguage = language.name.toString();
+                      ouputLanguageSelected = true;
+                    }),
+                itemBuilder: _buildDialogItem)),
+      );
   Future record() async {
     if (!isRecorderReady) return;
     await recorder.startRecorder(toFile: 'audio');
@@ -61,6 +109,30 @@ class _HomePageState extends State<HomePage> {
     recorder.setSubscriptionDuration(
       const Duration(milliseconds: 500),
     );
+  }
+
+  Future<void> fetchTranslatedText() async {
+    Map<String, String> headers = {
+      'Content-type': 'application/json',
+      'Accept': 'application/json',
+    };
+    var url = Uri.parse(
+        'https://7dfc-2405-201-e01c-315d-891f-1beb-cfdb-ae2d.ngrok-free.app/predict/$docId/$inputLanguage/$outputLanguage');
+    final response = await http.get(url, headers: headers);
+    if (response.statusCode == 200) {
+      setAudio();
+      var data = response.body;
+      final decodedData = jsonDecode(data);
+      setState(() {
+        translatedText = decodedData["text"];
+        outputAudioUrl = decodedData["url"];
+        textTranslated = true;
+      });
+      print(translatedText);
+      print(outputAudioUrl);
+    } else {
+      throw Exception('Failed to load data');
+    }
   }
 
   @override
@@ -101,12 +173,9 @@ class _HomePageState extends State<HomePage> {
 
   Future setAudio() async {
     audioPlayer.setReleaseMode(ReleaseMode.loop);
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(FirebaseAuth.instance.currentUser!.uid)
-        .get();
-
-    url = snapshot.data()!['audioUrl'].toString();
+    final Reference audioRef =
+        FirebaseStorage.instance.ref().child('outputAudio/$docId');
+    url = await audioRef.getDownloadURL();
     audioPlayer.setSourceUrl(url.toString());
   }
 
@@ -147,18 +216,15 @@ class _HomePageState extends State<HomePage> {
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
                       Expanded(
-                        child: SizedBox(
-                          height: 80,
-                          width: 110,
-                          child: LanguagePickerDropdown(
-                              onValuePicked: (Language language) {
-                            if (kDebugMode) {
-                              print(language.name);
-                            }
-                            setState(() {
-                              inputLanguage = language.name.toString();
-                            });
-                          }),
+                        child: Row(
+                          children: [
+                            ElevatedButton(
+                                onPressed: _openLanguagePickerDialogInput,
+                                child: !inputLanguageSelected
+                                    ? Text('Input')
+                                    : Text(inputLanguage)),
+                            Icon(Icons.arrow_drop_down_rounded)
+                          ],
                         ),
                       ),
                       const SizedBox(
@@ -173,18 +239,15 @@ class _HomePageState extends State<HomePage> {
                         width: 30,
                       ),
                       Expanded(
-                        child: SizedBox(
-                          height: 80,
-                          width: 110,
-                          child: LanguagePickerDropdown(
-                              onValuePicked: (Language language) {
-                            if (kDebugMode) {
-                              print(language.name);
-                            }
-                            setState(() {
-                              outputLanguage = language.name.toString();
-                            });
-                          }),
+                        child: Row(
+                          children: [
+                            ElevatedButton(
+                                onPressed: _openLanguagePickerDialogOutput,
+                                child: !inputLanguageSelected
+                                    ? Text('Output')
+                                    : Text(outputLanguage)),
+                            Icon(Icons.arrow_drop_down_rounded)
+                          ],
                         ),
                       ),
                     ],
@@ -225,6 +288,8 @@ class _HomePageState extends State<HomePage> {
                       HapticFeedback.heavyImpact();
                       setState(() {
                         isRecording = true;
+                        translateButtonClicked = false;
+                        url = null;
                       });
                       await record();
                     },
@@ -270,23 +335,22 @@ class _HomePageState extends State<HomePage> {
                     if (inputAudioFile == null) {
                       Fluttertoast.showToast(
                           msg: 'Hold to record audio and translate');
-                    }
-                    if (inputAudioFile != null) {
+                    } else {
                       setState(() {
-                        recordDone = true;
+                        translateButtonClicked = true;
                       });
+                      String audioUrl = await StorageMethods()
+                          .uploadAudioToStroage('inputAudio', inputAudioFile!);
+                      await FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(FirebaseAuth.instance.currentUser!.uid)
+                          .update({
+                        'audioUrl': audioUrl,
+                        'inputLanguage': inputLanguage,
+                        'outputLanguage': outputLanguage
+                      });
+                      fetchTranslatedText();
                     }
-                    String audioUrl = await StorageMethods()
-                        .uploadAudioToStroage('inputAudio', inputAudioFile!);
-                    await FirebaseFirestore.instance
-                        .collection('users')
-                        .doc(FirebaseAuth.instance.currentUser!.uid)
-                        .update({
-                      'audioUrl': audioUrl,
-                      'inputLanguage': inputLanguage,
-                      'outputLanguage': outputLanguage
-                    });
-                    setAudio();
                   },
                   child: const Text('Translate')),
               const SizedBox(
@@ -325,11 +389,11 @@ class _HomePageState extends State<HomePage> {
                               border: Border.all(color: HexColor('E3DFFD'))),
                           child: Row(
                             children: [
-                              const Expanded(
+                              Expanded(
                                   flex: 3,
                                   child: FittedBox(
                                     child: Text(
-                                      'Translated text comes here',
+                                      translatedText.toString(),
                                       style: TextStyle(fontSize: 50),
                                     ),
                                   )),
@@ -358,9 +422,9 @@ class _HomePageState extends State<HomePage> {
                         )
                       ],
                     )
-                  : recordDone
-                      ? const LinearProgressIndicator()
-                      : const SizedBox()
+                  : translateButtonClicked
+                      ? LinearProgressIndicator()
+                      : SizedBox()
             ],
           ),
         ));
